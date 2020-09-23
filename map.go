@@ -192,7 +192,7 @@ func genericMapTextDecoder(buf []byte, defaultCodec *Codec, codecFromKey map[str
 			fieldCodec = defaultCodec
 		}
 		if fieldCodec == nil {
-			return nil, nil, fmt.Errorf("cannot decode textual map: cannot determine codec: %q", key)
+			return mapValues, nil, fmt.Errorf("cannot decode textual map: cannot determine codec: %q", key)
 		}
 		// decode colon
 		if buf, err = advanceAndConsume(buf, ':'); err != nil {

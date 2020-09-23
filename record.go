@@ -11,6 +11,7 @@ package goavro
 
 import (
 	"fmt"
+	"strings"
 )
 
 func makeRecordCodec(st map[string]*Codec, enclosingNamespace string, schemaMap map[string]interface{}) (*Codec, error) {
@@ -35,6 +36,14 @@ func makeRecordCodec(st map[string]*Codec, enclosingNamespace string, schemaMap 
 	nameFromIndex := make([]string, len(fieldSchemas))
 	defaultValueFromName := make(map[string]interface{}, len(fieldSchemas))
 
+	isTopRecord := func() bool{
+		if ns, has := schemaMap["namespace"]; has {
+			if nsStr, ok := ns.(string); ok && strings.HasPrefix(nsStr, "rcrai_mid_db.rcrai.") {
+				return true
+			}
+		}
+		return false
+	}
 	for i, fieldSchema := range fieldSchemas {
 		fieldSchemaMap, ok := fieldSchema.(map[string]interface{})
 		if !ok {
@@ -139,8 +148,13 @@ func makeRecordCodec(st map[string]*Codec, enclosingNamespace string, schemaMap 
 			return nil, fmt.Errorf("cannot encode binary record %q: expected map[string]interface{}; received: %T", c.typeName, datum)
 		}
 
+		codecFromIndex2 := codecFromIndex
+		if isTopRecord() {
+			codecFromIndex2 = codecFromIndex[:2]
+		}
+
 		// records encoded in order fields were defined in schema
-		for i, fieldCodec := range codecFromIndex {
+		for i, fieldCodec := range codecFromIndex2 {
 			fieldName := nameFromIndex[i]
 
 			// NOTE: If field value was not specified in map, then set
@@ -164,7 +178,11 @@ func makeRecordCodec(st map[string]*Codec, enclosingNamespace string, schemaMap 
 
 	c.nativeFromBinary = func(buf []byte) (interface{}, []byte, error) {
 		recordMap := make(map[string]interface{}, len(codecFromIndex))
-		for i, fieldCodec := range codecFromIndex {
+		codecFromIndex2 := codecFromIndex
+		if isTopRecord() {
+			codecFromIndex2 = codecFromIndex[:2]
+		}
+		for i, fieldCodec := range codecFromIndex2 {
 			name := nameFromIndex[i]
 			var value interface{}
 			var err error
@@ -183,22 +201,31 @@ func makeRecordCodec(st map[string]*Codec, enclosingNamespace string, schemaMap 
 		// NOTE: Setting `defaultCodec == nil` instructs genericMapTextDecoder
 		// to return an error when a field name is not found in the
 		// codecFromFieldName map.
-		mapValues, buf, err = genericMapTextDecoder(buf, nil, codecFromFieldName)
+		cffn := make(map[string]*Codec)
+		if isTopRecord() {
+			cffn["before"] = codecFromFieldName["before"]
+			cffn["after"] = codecFromFieldName["after"]
+		}else{
+			cffn = codecFromFieldName
+		}
+		mapValues, buf, err = genericMapTextDecoder(buf, nil, cffn)
 		if err != nil {
-			return nil, nil, fmt.Errorf("cannot decode textual record %q: %s", c.typeName, err)
-		}
-		if actual, expected := len(mapValues), len(codecFromFieldName); actual != expected {
-			// set missing field keys to their respective default values, then
-			// re-check number of keys
-			for fieldName, defaultValue := range defaultValueFromName {
-				if _, ok := mapValues[fieldName]; !ok {
-					mapValues[fieldName] = defaultValue
-				}
-			}
-			if actual, expected = len(mapValues), len(codecFromFieldName); actual != expected {
-				return nil, nil, fmt.Errorf("cannot decode textual record %q: only found %d of %d fields", c.typeName, actual, expected)
+			if !strings.HasPrefix(err.Error(), "cannot decode textual map: cannot determine codec:") {
+				return nil, nil, fmt.Errorf("cannot decode textual record %q: %s", c.typeName, err)
 			}
 		}
+		//if actual, expected := len(mapValues), len(codecFromFieldName); actual != expected {
+		//	// set missing field keys to their respective default values, then
+		//	// re-check number of keys
+		//	for fieldName, defaultValue := range defaultValueFromName {
+		//		if _, ok := mapValues[fieldName]; !ok {
+		//			mapValues[fieldName] = defaultValue
+		//		}
+		//	}
+		//	if actual, expected = len(mapValues), len(codecFromFieldName); actual != expected {
+		//		return nil, nil, fmt.Errorf("cannot decode textual record %q: only found %d of %d fields", c.typeName, actual, expected)
+		//	}
+		//}
 		return mapValues, buf, nil
 	}
 
